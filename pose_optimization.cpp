@@ -186,7 +186,7 @@ void  MakeHessian(const vector<Vector2d>& obs,
     {
         Matrix_26 jabobian = ComputeJacobian(Rcw, tcw, Pws[i], K);
 
-        MatrixXd Jt = jabobian.transpose(); // * info_matrix[i];
+        MatrixXd Jt = jabobian.transpose()* info_matrix[i];
 
         b -= Jt*error[i];
 
@@ -510,6 +510,7 @@ void GenerateData(int N, const Matrix3d& K, vector<Vector3d>& Pws, vector<Vector
     {
         info_matrix[i] = Matrix2d::Identity();
     }
+    exit(9);
 }
 
 
