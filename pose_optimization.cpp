@@ -241,8 +241,7 @@ void  MakeHessian(const vector<Vector2d>& obs,
                   Matrix<double, 6, 6>& H,
                   Matrix<double, 6, 1>& b,
                   const vector<int>& status,
-                  double delta = 0.,
-                  double chi2 = 0.)
+                  double delta = 0.)
 {
     b = Vector6d::Zero(); // 6*1
     H = Matrix_66::Zero(); // 6*6
@@ -276,14 +275,16 @@ void  MakeHessian(const vector<Vector2d>& obs,
             double tmp_chi2 = ComputeChi2(error[i], info_matrix[i]);
             
             MatrixXd info_tmp(info_matrix[i].rows(), info_matrix[i].cols());
+            info_tmp.setIdentity();
             //Robustify_Info(tmp_chi2, error[i], delta, rho, info_matrix[i], info_tmp);
             Robustify(tmp_chi2, delta, rho);
             
 
             b -= jabobian.transpose()*  info_matrix[i] * rho[1] * error[i];
-            info_tmp = rho[1] * info_matrix[i];
-            //VectorXd  weightedErrror = info_matrix[i] * error[i];
-            //info_tmp += 2 * rho[2] * (weightedErrror * weightedErrror.transpose());
+            info_tmp *= rho[1];
+            info_tmp = info_tmp * info_matrix[i];
+            
+
             H += jabobian.transpose() * info_tmp * jabobian;
         }
     }
@@ -465,7 +466,7 @@ void LM_Solver(int iterations,
     stop_chi2 = 1e-8 * chi2;  //TODO:自行修改，误差下降了1e-6倍，则停止
 
 
-    MakeHessian(obs, error, Pws, Rcw, tcw, K, info_matrix, H, b, status, delta, chi2);
+    MakeHessian(obs, error, Pws, Rcw, tcw, K, info_matrix, H, b, status, delta);
 
     double maxDiagnal = 0.;
     ulong size = H.rows();
@@ -500,7 +501,7 @@ void LM_Solver(int iterations,
             {
                 false_cnt++;
                 cout << " levenbergIter= "  << false_cnt << endl;              
-                MakeHessian(obs, error, Pws, Rcw, tcw, K, info_matrix, H, b, status, delta, chi2);
+                MakeHessian(obs, error, Pws, Rcw, tcw, K, info_matrix, H, b, status, delta);
                 
                 false_cnt = 0;
             }
