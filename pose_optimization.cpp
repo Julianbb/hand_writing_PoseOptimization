@@ -116,6 +116,37 @@ void exp(const Vector6d & update, Matrix3d& R_, Vector3d& t_)
    
 }
 
+//计算robust kenel function 对误差的　0,1,2阶倒数和信息矩阵
+// 在构建信息矩阵的时候，貌似二阶误差影响不是很大，可以直接用roh[1]* info_matrix[i]代替，g2o里面就是这么干的
+// void Robustify_Info(double e, const VectorXd& residual, double delta, Eigen::Vector3d& rho, const MatrixXd& info_matrix, MatrixXd info)
+// {
+//     double dsqr = delta * delta;
+//   if (e <= dsqr) { // inlier
+//     rho[0] = e;
+//     rho[1] = 1.;
+//     rho[2] = 0.;
+//   } else { // outlier
+//     double sqrte = sqrt(e); // absolut value of the error
+//     rho[0] = 2*sqrte*delta - dsqr; // rho(e)   = 2 * delta * e^(1/2) - delta^2
+//     rho[1] = delta / sqrte;        // rho'(e)  = delta / sqrt(e)
+//     rho[2] = - 0.5 * rho[1] / e;    // rho''(e) = -1 / (2*e^(3/2)) = -1/2 * (delta/e) / e
+//   }
+//     MatrixXd sqrt_information= Eigen::LLT<MatrixXd>(info_matrix).matrixL().transpose();
+//     VectorXd weight_err = sqrt_information * residual;
+
+//     MatrixXd robust_info(info_matrix.rows(), info_matrix.cols());
+//     robust_info.setIdentity();
+//     robust_info *= rho[1];
+
+//     if(rho[1] + 2 * rho[2] * e > 0.)
+//     {
+//         robust_info += 2 * rho[2] * weight_err * weight_err.transpose();
+//     }
+
+//     info = robust_info * info_matrix;
+
+// }
+
 
 void Robustify(double e, double delta, Eigen::Vector3d& rho)
 {
@@ -130,6 +161,7 @@ void Robustify(double e, double delta, Eigen::Vector3d& rho)
     rho[1] = delta / sqrte;        // rho'(e)  = delta / sqrt(e)
     rho[2] = - 0.5 * rho[1] / e;    // rho''(e) = -1 / (2*e^(3/2)) = -1/2 * (delta/e) / e
   }
+   
 }
 
 
@@ -143,10 +175,25 @@ Vector2d ComputeError(const Vector2d& obs, const Matrix3d& Rcw,  const Vector3d&
     return error; 
 }
 
-double ComputeChi2(const Vector2d& error, const Matrix2d& info)
+double ComputeChi2(const Vector2d& error, const Matrix2d& info, double delta =0.0)
 {
-    return error.dot(info*error);
-
+    double ret = error.dot(info*error);
+    if(delta == 0.0)
+        return ret;
+    else
+    {
+       double dsqr = delta * delta;
+       if (ret <= dsqr) 
+       {
+           return ret;
+       }
+       else
+       {
+           double sqrte = sqrt(ret);
+           return 2*sqrte*delta - dsqr;
+       }
+    }
+    
 }
 
 Matrix_26 ComputeJacobian(const Matrix3d& Rcw,  const Vector3d& tcw, const Vector3d& Pw, const Matrix3d& K)
@@ -215,24 +262,26 @@ void  MakeHessian(const vector<Vector2d>& obs,
 
         }
     }
-    else //Huber loss function
+    else //Huber loss function, 会修改信息矩阵和残差
     {
 
-        for(int i=0; i< Pws.size(); i++)
+        for(int i=0; i < Pws.size(); i++)
         {
-            if(status[i] == 0) //TODO: xxxxxxx
+            if(status[i] == 0) 
                 continue;
 
+            Matrix_26 jabobian = ComputeJacobian(Rcw, tcw, Pws[i], K);
 
             Vector3d rho;
             double tmp_chi2 = ComputeChi2(error[i], info_matrix[i]);
+            
+            MatrixXd info_tmp(info_matrix[i].rows(), info_matrix[i].cols());
+            //Robustify_Info(tmp_chi2, error[i], delta, rho, info_matrix[i], info_tmp);
             Robustify(tmp_chi2, delta, rho);
+            
 
-            Matrix_26 jabobian = ComputeJacobian(Rcw, tcw, Pws[i], K);
-            MatrixXd Jt = jabobian.transpose()* info_matrix[i];
-
-            b -= Jt* rho[1] * error[i];
-            MatrixXd info_tmp = rho[1] * info_matrix[i];
+            b -= jabobian.transpose()*  info_matrix[i] * rho[1] * error[i];
+            info_tmp = rho[1] * info_matrix[i];
             //VectorXd  weightedErrror = info_matrix[i] * error[i];
             //info_tmp += 2 * rho[2] * (weightedErrror * weightedErrror.transpose());
             H += jabobian.transpose() * info_tmp * jabobian;
@@ -287,8 +336,8 @@ bool IsGoodStepInLM(double& lambda,
                     const Vector3d& tcw, 
                     const Matrix3d& K,
                     const vector<Matrix2d>& info_matrix,
-                    const vector<int>&status 
-                    )
+                    const vector<int>&status, 
+                    const double& delta)
                     
 {
     double scale = 0.;
@@ -299,12 +348,12 @@ bool IsGoodStepInLM(double& lambda,
     double tmp_chi2 =0.;
     for(int i =0; i< error.size(); i++)
     {
-        if(status[i] == 0) //TODO: xxxxxxx
+        if(status[i] == 0) 
             continue;
         Vector2d err = ComputeError(obs[i], Rcw, tcw, Pws[i], K);
         error[i] = err;
     
-        tmp_chi2 += ComputeChi2(error[i], info_matrix[i]);
+        tmp_chi2 += ComputeChi2(error[i], info_matrix[i], delta);
     }
 
     double rho = (chi2 - tmp_chi2) / scale;
@@ -400,7 +449,7 @@ void LM_Solver(int iterations,
     // 计算初始error
     for(int i =0; i< Pws.size(); i++)
     {
-        if(status[i] == 0) //TODO: xxxxxxx
+        if(status[i] == 0) 
             continue;
         Vector2d err = ComputeError(obs[i], Rcw, tcw, Pws[i], K);
         error[i] = err;
@@ -409,11 +458,11 @@ void LM_Solver(int iterations,
     //计算初始　Chi2
     for(int i = 0; i < error.size(); i++)
     {
-        if(status[i] == 0) //TODO: xxxxxxx
+        if(status[i] == 0) 
             continue;
-        chi2 += ComputeChi2(error[i], info_matrix[i]);
+        chi2 += ComputeChi2(error[i], info_matrix[i], delta);
     }
-    stop_chi2 = 1e-6 * chi2;  //TODO:自行修改，误差下降了1e-6倍，则停止
+    stop_chi2 = 1e-8 * chi2;  //TODO:自行修改，误差下降了1e-6倍，则停止
 
 
     MakeHessian(obs, error, Pws, Rcw, tcw, K, info_matrix, H, b, status, delta, chi2);
@@ -429,26 +478,28 @@ void LM_Solver(int iterations,
 
     bool stop = false;
     int its = 0;
-
+    int false_cnt = 0;
     while(!stop && (its < iterations))
     {
-        cout << " iters: " << its << " Chi2 : " << chi2  << " lambda: " << lambda << " edges: " << Pws.size() << endl;
+        cout << " iters: " << its << " Chi2 : " << chi2  << " lambda: " << lambda << " edges: " << Pws.size();
         bool oneStepSucceed = false;
-        int false_cnt = 0;
+        
         while(!oneStepSucceed)
         {
             SolveLinearSystem(H, b, delta_x, lambda); 
-            if(delta_x.squaredNorm() < 1e-12 || false_cnt > 10)  // TODO:根据需要修改控制delta_x的模小于一定量级就停止 delta_x.squaredNorm() < 1e-12 ||
+            if(delta_x.squaredNorm() < 1e-8 || false_cnt > 10)  // TODO:根据需要修改控制delta_x的模小于一定量级就停止 delta_x.squaredNorm() < 1e-12 ||
             {
-                //cout << false_cnt << endl;
+                cout << " levenbergIter= "  << false_cnt << endl; //输出为0说明：delta_x.squaredNorm() < 1e-8，但是上一次迭代成功的
                 stop = true;
                 break;
             }
             UpdateStates(Rcw, tcw, delta_x);
-            oneStepSucceed = IsGoodStepInLM(lambda, ni, delta_x, chi2, b, error, obs, Pws, Rcw, tcw, K, info_matrix, status);
+            oneStepSucceed = IsGoodStepInLM(lambda, ni, delta_x, chi2, b, error, obs, Pws, Rcw, tcw, K, info_matrix, status, delta);
 
             if(oneStepSucceed)
             {
+                false_cnt++;
+                cout << " levenbergIter= "  << false_cnt << endl;              
                 MakeHessian(obs, error, Pws, Rcw, tcw, K, info_matrix, H, b, status, delta, chi2);
                 
                 false_cnt = 0;
@@ -559,7 +610,7 @@ void GenerateData(int N, const Matrix3d& K, vector<Vector3d>& Pws, vector<Vector
         {
             local[0] = local[0] + 50;
             local[1] = local[1] + 100;
-            status[i] = 0;
+            status[i] = 1;
         }
         else
             status[i] = 1;
@@ -597,9 +648,16 @@ int main(void)
     K(0,2) = 320;
     K(1,2) = 160;
 
+    Matrix3d R_g = AngleAxisd(M_PI/4, Vector3d::UnitZ()).toRotationMatrix();
+    Vector3d t_g = Vector3d(0,0,1); 
+
+
     //生成真实数据
     GenerateData(N, K, Pws, obs, info_matrix, status);
-
+    cout << "ground truth " <<endl;
+    cout << R_g << endl;
+    cout << t_g << endl;
+    cout << endl << endl;
 
 
 
@@ -623,7 +681,8 @@ int main(void)
 
 
     TicToc solver_tic;
-    LM_Solver(10, Pws, obs, info_matrix, error, R, t, K, status); // LM_Solver  g2oOptimize
+    LM_Solver(10, Pws, obs, info_matrix, error, R, t, K, status, 5.); // LM_Solver  g2oOptimize
+    //g2oOptimize(10, Pws, obs, info_matrix, error, R, t, K, status, 5.);
     cout << solver_tic.toc() << " ms " << endl;
 
 
